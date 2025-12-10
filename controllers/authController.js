@@ -1,13 +1,13 @@
-const User = require("../models/user");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const { z } = require("zod");
+import User from "../models/user.js";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import z from "zod";
 
 const registerSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().min(6),
-  age: z.number().min(0),
+  age: z.coerce.number().min(18)
 });
 
 const loginSchema = z.object({
@@ -18,7 +18,7 @@ const loginSchema = z.object({
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
 
 // Register Controller
-const registerUser = async (req, res) => {
+export const registerUser = async (req, res) => {
 
   try {
     const result = registerSchema.safeParse(req.body);
@@ -60,7 +60,7 @@ const registerUser = async (req, res) => {
 };
 
 // Login Controller
-const loginUser = async (req, res) => {
+export const loginUser = async (req, res) => {
   try {
     const result = loginSchema.safeParse(req.body);
     if (!result.success) {
@@ -70,10 +70,10 @@ const loginUser = async (req, res) => {
     const { email, password } = result.data;
 
     const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ message: "Invalid credentials" });
+    if (!user) return res.status(400).json({ message: "Invalid Email" });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
+    if (!isMatch) return res.status(400).json({ message: "Invalid Password" });
 
     const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
 
@@ -94,4 +94,4 @@ const loginUser = async (req, res) => {
 
 
 
-module.exports = { registerUser, loginUser };
+export default { registerUser, loginUser };

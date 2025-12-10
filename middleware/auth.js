@@ -1,7 +1,8 @@
-const jwt = require('jsonwebtoken');
-const User = require('../models/user');
+// middleware/auth.js
+import jwt from "jsonwebtoken";
+import User from "../models/user.js";
 
-async function authenticateToken(req, res, next) {
+export async function authenticateToken(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Authorization header missing or malformed' });
@@ -28,6 +29,4 @@ async function authenticateToken(req, res, next) {
   }
 }
 
-module.exports = {
-  authenticateToken
-};
+export default { authenticateToken };

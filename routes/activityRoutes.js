@@ -1,39 +1,49 @@
-const express = require("express")
-const router = express.Router()
-const Activity = require("../models/Activity")
+import express from "express";
+import Activity from "../models/Activity.js"; // Make sure your model exports default
+
+const router = express.Router();
 
 // Middleware to validate API key (optional security)
 const validateApiKey = (req, res, next) => {
-
-
-    next()
-}
+    // Example: check API key in headers
+    // if (req.headers["x-api-key"] !== process.env.API_KEY) {
+    //     return res.status(401).json({ success: false, error: "Invalid API key" });
+    // }
+    next();
+};
 
 // Middleware to parse and validate activity data
 const validateActivityData = (req, res, next) => {
-    const { url, pathname, method, userAgent, ip } = req.body
+    const { url, pathname, method } = req.body;
 
     if (!url || !pathname || !method) {
         return res.status(400).json({
             success: false,
             error: "Missing required fields: url, pathname, method",
             required: ["url", "pathname", "method"],
-            optional: ["userAgent", "referer", "ip", "searchParams", "headers", "sessionId", "userId"],
-        })
+            optional: [
+                "userAgent",
+                "referer",
+                "ip",
+                "searchParams",
+                "headers",
+                "sessionId",
+                "userId",
+            ],
+        });
     }
 
-    // Validate HTTP method
-    const validMethods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]
+    const validMethods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"];
     if (!validMethods.includes(method.toUpperCase())) {
         return res.status(400).json({
             success: false,
             error: "Invalid HTTP method",
-            validMethods: validMethods,
-        })
+            validMethods,
+        });
     }
 
-    next()
-}
+    next();
+};
 
 // POST /api/activity - Log a single activity
 router.post("/", validateApiKey, validateActivityData, async (req, res) => {
@@ -44,7 +54,7 @@ router.post("/", validateApiKey, validateActivityData, async (req, res) => {
             method: req.body.method.toUpperCase(),
             userAgent: req.body.userAgent || "Unknown",
             referer: req.body.referer || "",
-            ip: req.body.ip || req.ip || "unknown",
+            ip: req.body.ip || req.ip.replace("::ffff:", "") || "unknown",
             timestamp: req.body.timestamp ? new Date(req.body.timestamp) : new Date(),
             searchParams: req.body.searchParams || {},
             headers: {
@@ -55,10 +65,11 @@ router.post("/", validateApiKey, validateActivityData, async (req, res) => {
             userId: req.body.userId || null,
             responseTime: req.body.responseTime || null,
             statusCode: req.body.statusCode || 200,
-        }
+            deviceType: req.body.deviceType || "unknown", // optional
+        };
 
-        const activity = new Activity(activityData)
-        await activity.save()
+        const activity = new Activity(activityData);
+        await activity.save();
 
         res.status(201).json({
             success: true,
@@ -69,49 +80,51 @@ router.post("/", validateApiKey, validateActivityData, async (req, res) => {
                 pathname: activity.pathname,
                 method: activity.method,
             },
-        })
+        });
     } catch (error) {
-        console.error("Error logging activity:", error)
+        console.error("Error logging activity:", error);
         res.status(500).json({
             success: false,
             error: "Failed to log activity",
             details: process.env.NODE_ENV === "development" ? error.message : undefined,
-        })
+        });
     }
-})
+});
 
 // POST /api/activity/batch - Log multiple activities at once
 router.post("/batch", validateApiKey, async (req, res) => {
     try {
-        const { activities } = req.body
+        const { activities } = req.body;
 
         if (!Array.isArray(activities) || activities.length === 0) {
             return res.status(400).json({
                 success: false,
                 error: "Activities must be a non-empty array",
-            })
+            });
         }
 
         if (activities.length > 100) {
             return res.status(400).json({
                 success: false,
                 error: "Maximum 100 activities allowed per batch",
-            })
+            });
         }
 
-        const processedActivities = activities.map((activity, index) => {
-            // Validate each activity
-            if (!activity.url || !activity.pathname || !activity.method) {
-                throw new Error(`Activity at index ${index} is missing required fields`)
-            }
+        const validActivities = [];
+        const invalidIndexes = [];
 
-            return {
+        activities.forEach((activity, index) => {
+            if (!activity.url || !activity.pathname || !activity.method) {
+                invalidIndexes.push(index);
+                return;
+            }
+            validActivities.push({
                 url: activity.url,
                 pathname: activity.pathname,
                 method: activity.method.toUpperCase(),
                 userAgent: activity.userAgent || "Unknown",
                 referer: activity.referer || "",
-                ip: activity.ip || req.ip || "unknown",
+                ip: activity.ip || req.ip.replace("::ffff:", "") || "unknown",
                 timestamp: activity.timestamp ? new Date(activity.timestamp) : new Date(),
                 searchParams: activity.searchParams || {},
                 headers: {
@@ -122,28 +135,37 @@ router.post("/batch", validateApiKey, async (req, res) => {
                 userId: activity.userId || null,
                 responseTime: activity.responseTime || null,
                 statusCode: activity.statusCode || 200,
-            }
-        })
+                deviceType: activity.deviceType || "unknown",
+            });
+        });
 
-        const savedActivities = await Activity.insertMany(processedActivities)
+        if (invalidIndexes.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: "Some activities are invalid",
+                invalidIndexes,
+            });
+        }
+
+        const savedActivities = await Activity.insertMany(validActivities);
 
         res.status(201).json({
             success: true,
             message: `${savedActivities.length} activities logged successfully`,
             data: {
                 count: savedActivities.length,
-                ids: savedActivities.map(activity => activity._id),
+                ids: savedActivities.map((activity) => activity._id),
             },
-        })
+        });
     } catch (error) {
-        console.error("Error logging batch activities:", error)
+        console.error("Error logging batch activities:", error);
         res.status(500).json({
             success: false,
             error: "Failed to log batch activities",
             details: process.env.NODE_ENV === "development" ? error.message : undefined,
-        })
+        });
     }
-})
+});
 
 // GET /api/activity - Get activities with filtering and pagination
 router.get("/", validateApiKey, async (req, res) => {
@@ -160,112 +182,94 @@ router.get("/", validateApiKey, async (req, res) => {
             sessionId,
             sortBy = "timestamp",
             sortOrder = "desc",
-        } = req.query
+        } = req.query;
 
-        // Build filter object
-        const filter = {}
+        const filter = {};
 
-        // Date range filter
         if (startDate || endDate) {
-            filter.timestamp = {}
-            if (startDate) filter.timestamp.$gte = new Date(startDate)
-            if (endDate) filter.timestamp.$lte = new Date(endDate)
+            filter.timestamp = {};
+            if (startDate) filter.timestamp.$gte = new Date(startDate);
+            if (endDate) filter.timestamp.$lte = new Date(endDate);
         }
 
-        // Other filters
-        if (method) filter.method = method.toUpperCase()
-        if (pathname) filter.pathname = new RegExp(pathname, "i") // Case-insensitive partial match
-        if (ip) filter.ip = ip
-        if (userId) filter.userId = userId
-        if (sessionId) filter.sessionId = sessionId
+        if (method) filter.method = method.toUpperCase();
+        if (pathname) {
+            const safePathname = pathname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            filter.pathname = new RegExp(safePathname, "i");
+        }
+        if (ip) filter.ip = ip;
+        if (userId) filter.userId = userId;
+        if (sessionId) filter.sessionId = sessionId;
 
-        // Build sort object
-        const sort = {}
-        sort[sortBy] = sortOrder === "asc" ? 1 : -1
+        const sort = {};
+        sort[sortBy] = sortOrder === "asc" ? 1 : -1;
 
-        // Execute query
         const activities = await Activity.find(filter)
             .sort(sort)
-            .limit(Number.parseInt(limit))
-            .skip(Number.parseInt(offset))
-            .select("-__v")
+            .limit(Number(limit))
+            .skip(Number(offset))
+            .select("-__v");
 
-        const total = await Activity.countDocuments(filter)
+        const total = await Activity.countDocuments(filter);
 
         res.json({
             success: true,
             data: {
-                activities: activities,
+                activities,
                 pagination: {
-                    total: total,
-                    limit: Number.parseInt(limit),
-                    offset: Number.parseInt(offset),
-                    pages: Math.ceil(total / Number.parseInt(limit)),
-                    currentPage: Math.floor(Number.parseInt(offset) / Number.parseInt(limit)) + 1,
+                    total,
+                    limit: Number(limit),
+                    offset: Number(offset),
+                    pages: Math.ceil(total / Number(limit)),
+                    currentPage: Math.floor(Number(offset) / Number(limit)) + 1,
                 },
                 filters: filter,
             },
-        })
+        });
     } catch (error) {
-        console.error("Error fetching activities:", error)
+        console.error("Error fetching activities:", error);
         res.status(500).json({
             success: false,
             error: "Failed to fetch activities",
             details: process.env.NODE_ENV === "development" ? error.message : undefined,
-        })
+        });
     }
-})
+});
 
-// GET /api/activity/stats - Get activity statistics
+// GET /api/activity/stats
 router.get("/stats", validateApiKey, async (req, res) => {
     try {
-        const { startDate, endDate, groupBy = "day" } = req.query
+        const { startDate, endDate, groupBy = "day" } = req.query;
 
-        const start = startDate ? new Date(startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // Default: last 7 days
-        const end = endDate ? new Date(endDate) : new Date()
+        const start = startDate ? new Date(startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const end = endDate ? new Date(endDate) : new Date();
 
-        // Basic stats
-        const totalActivities = await Activity.countDocuments({
-            timestamp: { $gte: start, $lte: end },
-        })
+        const totalActivities = await Activity.countDocuments({ timestamp: { $gte: start, $lte: end } });
+        const uniqueIPs = await Activity.distinct("ip", { timestamp: { $gte: start, $lte: end } });
+        const uniquePages = await Activity.distinct("pathname", { timestamp: { $gte: start, $lte: end } });
 
-        const uniqueIPs = await Activity.distinct("ip", {
-            timestamp: { $gte: start, $lte: end },
-        })
-
-        const uniquePages = await Activity.distinct("pathname", {
-            timestamp: { $gte: start, $lte: end },
-        })
-
-        // Method distribution
         const methodStats = await Activity.aggregate([
             { $match: { timestamp: { $gte: start, $lte: end } } },
             { $group: { _id: "$method", count: { $sum: 1 } } },
             { $sort: { count: -1 } },
-        ])
+        ]);
 
-        // Device type distribution
         const deviceStats = await Activity.aggregate([
             { $match: { timestamp: { $gte: start, $lte: end } } },
             { $group: { _id: "$deviceType", count: { $sum: 1 } } },
             { $sort: { count: -1 } },
-        ])
+        ]);
 
-        // Time-based grouping
-        let timeGrouping = {}
-        if (groupBy === "hour") {
-            timeGrouping = { $hour: "$timestamp" }
-        } else if (groupBy === "day") {
-            timeGrouping = { $dayOfYear: "$timestamp" }
-        } else if (groupBy === "month") {
-            timeGrouping = { $month: "$timestamp" }
-        }
+        let timeGrouping;
+        if (groupBy === "hour") timeGrouping = { $hour: "$timestamp" };
+        else if (groupBy === "day") timeGrouping = { $dayOfYear: "$timestamp" };
+        else if (groupBy === "month") timeGrouping = { $month: "$timestamp" };
 
         const timeStats = await Activity.aggregate([
             { $match: { timestamp: { $gte: start, $lte: end } } },
             { $group: { _id: timeGrouping, count: { $sum: 1 } } },
             { $sort: { _id: 1 } },
-        ])
+        ]);
 
         res.json({
             success: true,
@@ -280,24 +284,24 @@ router.get("/stats", validateApiKey, async (req, res) => {
                 deviceDistribution: deviceStats,
                 timeDistribution: timeStats,
             },
-        })
+        });
     } catch (error) {
-        console.error("Error fetching activity stats:", error)
+        console.error("Error fetching activity stats:", error);
         res.status(500).json({
             success: false,
             error: "Failed to fetch activity statistics",
             details: process.env.NODE_ENV === "development" ? error.message : undefined,
-        })
+        });
     }
-})
+});
 
-// GET /api/activity/popular-pages - Get most popular pages
+// GET /api/activity/popular-pages
 router.get("/popular-pages", validateApiKey, async (req, res) => {
     try {
-        const { limit = 10, startDate, endDate } = req.query
+        const { limit = 10, startDate, endDate } = req.query;
 
-        const start = startDate ? new Date(startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-        const end = endDate ? new Date(endDate) : new Date()
+        const start = startDate ? new Date(startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const end = endDate ? new Date(endDate) : new Date();
 
         const popularPages = await Activity.aggregate([
             { $match: { timestamp: { $gte: start, $lte: end } } },
@@ -319,103 +323,85 @@ router.get("/popular-pages", validateApiKey, async (req, res) => {
                 },
             },
             { $sort: { visits: -1 } },
-            { $limit: Number.parseInt(limit) },
-        ])
+            { $limit: Number(limit) },
+        ]);
 
-        res.json({
-            success: true,
-            data: popularPages,
-        })
+        res.json({ success: true, data: popularPages });
     } catch (error) {
-        console.error("Error fetching popular pages:", error)
+        console.error("Error fetching popular pages:", error);
         res.status(500).json({
             success: false,
             error: "Failed to fetch popular pages",
             details: process.env.NODE_ENV === "development" ? error.message : undefined,
-        })
+        });
     }
-})
+});
 
-// GET /api/activity/user/:userId - Get activities for a specific user
+// GET /api/activity/user/:userId
 router.get("/user/:userId", validateApiKey, async (req, res) => {
     try {
-        const { userId } = req.params
-        const { limit = 50, offset = 0 } = req.query
+        const { userId } = req.params;
+        const { limit = 50, offset = 0 } = req.query;
 
         const activities = await Activity.find({ userId })
             .sort({ timestamp: -1 })
-            .limit(Number.parseInt(limit))
-            .skip(Number.parseInt(offset))
-            .select("-__v")
+            .limit(Number(limit))
+            .skip(Number(offset))
+            .select("-__v");
 
-        const total = await Activity.countDocuments({ userId })
+        const total = await Activity.countDocuments({ userId });
 
         res.json({
             success: true,
-            data: {
-                userId,
-                activities,
-                total,
-                limit: Number.parseInt(limit),
-                offset: Number.parseInt(offset),
-            },
-        })
+            data: { userId, activities, total, limit: Number(limit), offset: Number(offset) },
+        });
     } catch (error) {
-        console.error("Error fetching user activities:", error)
+        console.error("Error fetching user activities:", error);
         res.status(500).json({
             success: false,
             error: "Failed to fetch user activities",
             details: process.env.NODE_ENV === "development" ? error.message : undefined,
-        })
+        });
     }
-})
+});
 
-// DELETE /api/activity/cleanup - Clean up old activities
+// DELETE /api/activity/cleanup
 router.delete("/cleanup", validateApiKey, async (req, res) => {
     try {
-        const { days = 30, dryRun = false } = req.query
-        const cutoffDate = new Date(Date.now() - Number.parseInt(days) * 24 * 60 * 60 * 1000)
+        const { days = 30, dryRun = false } = req.query;
+        const cutoffDate = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000);
 
         if (dryRun === "true") {
-            // Just count what would be deleted
-            const count = await Activity.countDocuments({
-                timestamp: { $lt: cutoffDate },
-            })
-
-            res.json({
+            const count = await Activity.countDocuments({ timestamp: { $lt: cutoffDate } });
+            return res.json({
                 success: true,
                 message: `Would delete ${count} activities older than ${days} days`,
                 dryRun: true,
                 cutoffDate,
-            })
-        } else {
-            // Actually delete the activities
-            const result = await Activity.deleteMany({
-                timestamp: { $lt: cutoffDate },
-            })
-
-            res.json({
-                success: true,
-                message: `Deleted ${result.deletedCount} activities older than ${days} days`,
-                deletedCount: result.deletedCount,
-                cutoffDate,
-            })
+            });
         }
+
+        const result = await Activity.deleteMany({ timestamp: { $lt: cutoffDate } });
+        res.json({
+            success: true,
+            message: `Deleted ${result.deletedCount} activities older than ${days} days`,
+            deletedCount: result.deletedCount,
+            cutoffDate,
+        });
     } catch (error) {
-        console.error("Error cleaning up activities:", error)
+        console.error("Error cleaning up activities:", error);
         res.status(500).json({
             success: false,
             error: "Failed to cleanup activities",
             details: process.env.NODE_ENV === "development" ? error.message : undefined,
-        })
+        });
     }
-})
+});
 
-// GET /api/activity/health - Health check endpoint
+// GET /api/activity/health
 router.get("/health", async (req, res) => {
     try {
-        // Check database connection
-        const dbStatus = await Activity.countDocuments().limit(1)
+        await Activity.findOne(); // Check DB connection
 
         res.json({
             success: true,
@@ -423,7 +409,7 @@ router.get("/health", async (req, res) => {
             timestamp: new Date().toISOString(),
             database: "connected",
             version: "1.0.0",
-        })
+        });
     } catch (error) {
         res.status(503).json({
             success: false,
@@ -431,8 +417,8 @@ router.get("/health", async (req, res) => {
             timestamp: new Date().toISOString(),
             database: "disconnected",
             error: error.message,
-        })
+        });
     }
-})
+});
 
-module.exports = router
+export default router;
